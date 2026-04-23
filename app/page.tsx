@@ -1,5 +1,5 @@
 "use client";
-
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { auth } from "./lib/firebase";
 import {
@@ -68,7 +68,18 @@ export default function LoginPage() {
   return (
     <div style={paginaStyle}>
       <div style={cardStyle}>
-        <div style={logoCircleStyle}>AJP</div>
+        <div style={{
+    ...logoCircleStyle,
+    overflow: "hidden",
+    background: "none",
+  }}
+>
+  <Image src="/logo.png" alt="AJP Logo"
+    width={74}
+    height={74}
+    style={{ objectFit: "cover" }}
+  />
+</div>
 
         <h1 style={tituloStyle}>AJP Horas</h1>
 
