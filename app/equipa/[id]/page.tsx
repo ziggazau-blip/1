@@ -398,7 +398,7 @@ export default function EquipaPage() {
         </Link>
 
         <div style={topCardStyle}>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={topInfoStyle}>
             <h1 style={tituloStyle}>{nomeEquipa}</h1>
             <p style={subtituloStyle}>
               Semana: {formatDatePt(inicioSemana)} até {formatDatePt(fimSemana)}
@@ -575,6 +575,11 @@ const topCardStyle: React.CSSProperties = {
   boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
 };
 
+const topInfoStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+};
+
 const tituloStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 34,
@@ -591,7 +596,8 @@ const subtituloStyle: React.CSSProperties = {
 const semanaBotoesWrapStyle: React.CSSProperties = {
   display: "flex",
   gap: 10,
-  flexWrap: "wrap",
+  flexWrap: "nowrap",
+  width: "100%",
 };
 
 const acoesStyle: React.CSSProperties = {
@@ -683,15 +689,18 @@ const totalCardStyle: React.CSSProperties = {
 };
 
 const botaoAzulStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
   background: "#2563eb",
   color: "white",
-  padding: "12px 16px",
+  padding: "12px 14px",
   borderRadius: 10,
   border: "none",
   cursor: "pointer",
   fontWeight: "bold",
-  fontSize: 15,
+  fontSize: 14,
   boxShadow: "0 10px 22px rgba(37,99,235,0.22)",
+  whiteSpace: "nowrap",
 };
 
 const botaoVerdeStyle: React.CSSProperties = {
