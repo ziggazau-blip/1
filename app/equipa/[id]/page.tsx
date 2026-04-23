@@ -3,15 +3,15 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, signOut, User } from "firebase/auth";
-import { auth } from "../lib/firebase";
+import { auth } from "../../lib/firebase";
 import {
   apagarEquipa,
   buscarEquipasDoUser,
   buscarTodasEquipas,
   criarEquipa,
   Equipa,
-} from "../lib/firestore";
-import { ADMIN_EMAILS } from "../lib/appConfig";
+} from "../../lib/firestore";
+import { ADMIN_EMAILS } from "../../lib/appConfig";
 
 export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
