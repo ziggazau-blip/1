@@ -129,13 +129,13 @@ export default function DashboardPage() {
           <p style={heroTextoStyle}>
             {isAdmin
               ? "O administrador pode ver todas as equipas."
-              : "O encarregado só pode gerir as equipas dele."}
+              : "O encarregado pode gerir as suas equipas."}
           </p>
         </div>
 
         <div style={cardStyle}>
           <h3 style={cardTituloStyle}>
-            {isAdmin ? "Criar equipa" : "Criar a tua equipa"}
+            {isAdmin ? "Criar equipa" : "Criar nova equipa"}
           </h3>
 
           <div style={formRowStyle}>
