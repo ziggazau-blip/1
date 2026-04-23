@@ -3,381 +3,466 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { auth } from "../../lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
-
-const dias = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"] as const;
-type Dia = (typeof dias)[number];
+import { doc, getDoc, setDoc } from "firebase/firestore";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
+import { auth, db } from "../../lib/firebase";
+import { ADMIN_EMAILS } from "../../lib/appConfig";
+import { buscarEquipaPorId } from "../../lib/firestore";
 
 type Linha = {
   nome: string;
-  Seg: string;
-  Ter: string;
-  Qua: string;
-  Qui: string;
-  Sex: string;
-  Sáb: string;
-  Dom: string;
+  seg: string;
+  ter: string;
+  qua: string;
+  qui: string;
+  sex: string;
+  sab: string;
+  dom: string;
 };
 
-type Equipa = {
-  id: string;
-  nome: string;
-  ownerUid: string;
-  ownerEmail: string;
-};
-
-const ADMIN_EMAILS = ["TEU_EMAIL_AQUI@gmail.com"];
-const STORAGE_EQUIPAS = "ajp-admin-equipas";
-
-export default function PaginaEquipa() {
-  const params = useParams();
-  const idParam = params?.id;
-  const id = Array.isArray(idParam) ? idParam[0] : String(idParam || "1");
-
-  return <FolhaEquipa key={id} id={id} />;
+function novaLinha(): Linha {
+  return {
+    nome: "",
+    seg: "",
+    ter: "",
+    qua: "",
+    qui: "",
+    sex: "",
+    sab: "",
+    dom: "",
+  };
 }
 
-function FolhaEquipa({ id }: { id: string }) {
+function getInicioSemana(data: Date) {
+  const d = new Date(data);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function formatDateKey(data: Date) {
+  const ano = data.getFullYear();
+  const mes = String(data.getMonth() + 1).padStart(2, "0");
+  const dia = String(data.getDate()).padStart(2, "0");
+  return `${ano}-${mes}-${dia}`;
+}
+
+function formatDatePt(data: Date) {
+  return data.toLocaleDateString("pt-PT");
+}
+
+export default function EquipaPage() {
+  const params = useParams();
+  const rawId = params?.id;
+  const equipaId = Array.isArray(rawId) ? rawId[0] : String(rawId || "");
+
+  const [mounted, setMounted] = useState(false);
   const [user, setUser] = useState<User | null>(null);
-  const [linhas, setLinhas] = useState<Linha[]>([]);
-  const [mensagem, setMensagem] = useState("");
-  const [dataSemana, setDataSemana] = useState(new Date());
-  const [nomeEquipa, setNomeEquipa] = useState("Equipa");
+  const [nomeEquipa, setNomeEquipa] = useState("");
+  const [linhas, setLinhas] = useState<Linha[]>([
+    novaLinha(),
+    novaLinha(),
+    novaLinha(),
+  ]);
   const [loading, setLoading] = useState(true);
+  const [semanaBase, setSemanaBase] = useState<Date | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (authUser) => {
-      if (!authUser) {
+    setMounted(true);
+    setSemanaBase(new Date());
+  }, []);
+
+  const isAdmin = useMemo(() => {
+    const email = (user?.email || "").toLowerCase().trim();
+    return ADMIN_EMAILS.map((e) => e.toLowerCase().trim()).includes(email);
+  }, [user]);
+
+  const inicioSemana = useMemo(() => {
+    if (!semanaBase) return null;
+    return getInicioSemana(semanaBase);
+  }, [semanaBase]);
+
+  const fimSemana = useMemo(() => {
+    if (!inicioSemana) return null;
+    const d = new Date(inicioSemana);
+    d.setDate(d.getDate() + 6);
+    return d;
+  }, [inicioSemana]);
+
+  const semanaKey = useMemo(() => {
+    if (!inicioSemana) return "";
+    return formatDateKey(inicioSemana);
+  }, [inicioSemana]);
+
+  const folhaDocId = useMemo(() => {
+    if (!equipaId || !semanaKey) return "";
+    return `${equipaId}_${semanaKey}`;
+  }, [equipaId, semanaKey]);
+
+  useEffect(() => {
+    if (!mounted || !equipaId || !folhaDocId) return;
+
+    const unsubscribe = onAuthStateChanged(auth, async (u) => {
+      if (!u) {
         window.location.href = "/";
         return;
       }
 
-      const isAdmin = ADMIN_EMAILS.map((e) => e.toLowerCase()).includes(
-        (authUser.email || "").toLowerCase()
-      );
-
-      setUser(authUser);
-
-      const guardadas = localStorage.getItem(STORAGE_EQUIPAS);
-
-      if (!guardadas) {
-        window.location.href = "/dashboard";
-        return;
-      }
+      setUser(u);
 
       try {
-        const equipas: Equipa[] = JSON.parse(guardadas);
-        const equipa = equipas.find((e) => e.id === id);
+        const equipa = await buscarEquipaPorId(equipaId);
 
         if (!equipa) {
+          alert("Equipa não encontrada.");
           window.location.href = "/dashboard";
           return;
         }
 
-        if (!isAdmin && equipa.ownerUid !== authUser.uid) {
+        const admin = ADMIN_EMAILS.map((e) => e.toLowerCase().trim()).includes(
+          (u.email || "").toLowerCase().trim()
+        );
+
+        if (!admin && equipa.ownerUid !== u.uid) {
+          alert("Não tens acesso a esta equipa.");
           window.location.href = "/dashboard";
           return;
         }
 
         setNomeEquipa(equipa.nome);
-      } catch {
-        window.location.href = "/dashboard";
-        return;
-      }
 
-      setLoading(false);
+        const folhaRef = doc(db, "folhas", folhaDocId);
+        const folhaSnap = await getDoc(folhaRef);
+
+        if (folhaSnap.exists()) {
+          const data = folhaSnap.data();
+          if (Array.isArray(data.linhas)) {
+            setLinhas(data.linhas as Linha[]);
+          }
+        } else {
+          setLinhas([novaLinha(), novaLinha(), novaLinha()]);
+        }
+      } catch (error) {
+        console.error("Erro ao carregar folha:", error);
+        alert("Erro ao carregar a folha.");
+      } finally {
+        setLoading(false);
+      }
     });
 
     return () => unsubscribe();
-  }, [id]);
+  }, [mounted, equipaId, folhaDocId]);
 
-  function getInicioSemana(data: Date) {
-    const novaData = new Date(data);
-    const dia = novaData.getDay();
-    const diff = dia === 0 ? -6 : 1 - dia;
-    novaData.setDate(novaData.getDate() + diff);
-    novaData.setHours(0, 0, 0, 0);
-    return novaData;
-  }
-
-  function getFimSemana(data: Date) {
-    const inicio = getInicioSemana(data);
-    const fim = new Date(inicio);
-    fim.setDate(inicio.getDate() + 6);
-    return fim;
-  }
-
-  function formatarData(data: Date) {
-    return data.toLocaleDateString("pt-PT");
-  }
-
-  function formatarChaveSemana(data: Date) {
-    const inicio = getInicioSemana(data);
-    const ano = inicio.getFullYear();
-    const mes = String(inicio.getMonth() + 1).padStart(2, "0");
-    const dia = String(inicio.getDate()).padStart(2, "0");
-    return `${ano}-${mes}-${dia}`;
-  }
-
-  const inicioSemana = getInicioSemana(dataSemana);
-  const fimSemana = getFimSemana(dataSemana);
-  const semanaKey = formatarChaveSemana(dataSemana);
-  const storageKeyFolha = user
-    ? `folha-${id}-${semanaKey}`
-    : `folha-${id}-${semanaKey}`;
-
-  function criarLinhaVazia(): Linha {
-    return {
-      nome: "",
-      Seg: "",
-      Ter: "",
-      Qua: "",
-      Qui: "",
-      Sex: "",
-      Sáb: "",
-      Dom: "",
-    };
-  }
-
-  useEffect(() => {
-    if (!user) return;
-
-    const guardado = localStorage.getItem(storageKeyFolha);
-
-    if (guardado) {
-      try {
-        const dados = JSON.parse(guardado);
-
-        if (Array.isArray(dados) && dados.length > 0) {
-          setLinhas(dados);
-          return;
-        }
-      } catch {}
-    }
-
-    setLinhas([
-      criarLinhaVazia(),
-      criarLinhaVazia(),
-      criarLinhaVazia(),
-      criarLinhaVazia(),
-      criarLinhaVazia(),
-    ]);
-  }, [storageKeyFolha, user]);
-
-  function atualizarHora(index: number, dia: Dia, valor: string) {
+  function alterar(index: number, campo: keyof Linha, valor: string) {
     setLinhas((prev) =>
       prev.map((linha, i) =>
-        i === index
-          ? {
-              ...linha,
-              [dia]: valor,
-            }
-          : linha
+        i === index ? { ...linha, [campo]: valor } : linha
       )
     );
   }
 
-  function atualizarNome(index: number, valor: string) {
-    setLinhas((prev) =>
-      prev.map((linha, i) =>
-        i === index
-          ? {
-              ...linha,
-              nome: valor,
-            }
-          : linha
-      )
-    );
+  function add() {
+    setLinhas((prev) => [...prev, novaLinha()]);
   }
 
-  function adicionarLinha() {
-    setLinhas((prev) => [...prev, criarLinhaVazia()]);
-  }
-
-  function removerLinha(index: number) {
+  function remover(index: number) {
     setLinhas((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function totalTrabalhador(linha: Linha) {
-    return dias.reduce((total, dia) => total + Number(linha[dia] || 0), 0);
+  function total(l: Linha) {
+    return (
+      Number(l.seg || 0) +
+      Number(l.ter || 0) +
+      Number(l.qua || 0) +
+      Number(l.qui || 0) +
+      Number(l.sex || 0) +
+      Number(l.sab || 0) +
+      Number(l.dom || 0)
+    );
   }
 
-  const totalEquipa = useMemo(() => {
-    return linhas.reduce((total, linha) => total + totalTrabalhador(linha), 0);
-  }, [linhas]);
-
-  function guardarFolha() {
-    localStorage.setItem(storageKeyFolha, JSON.stringify(linhas));
-    setMensagem("Guardado com sucesso");
-
-    setTimeout(() => {
-      setMensagem("");
-    }, 2000);
+  function totalEquipa() {
+    return linhas.reduce((acc, l) => acc + total(l), 0);
   }
+
+  async function guardar() {
+    if (!folhaDocId || !inicioSemana || !fimSemana) return;
+
+    try {
+      await setDoc(doc(db, "folhas", folhaDocId), {
+        equipaId,
+        nomeEquipa,
+        semana: semanaKey,
+        inicioSemana: formatDateKey(inicioSemana),
+        fimSemana: formatDateKey(fimSemana),
+        linhas,
+        totalEquipa: totalEquipa(),
+        updatedAt: Date.now(),
+        updatedBy: user?.email || "",
+      });
+
+      alert("Guardado com sucesso 💪");
+    } catch (error) {
+      console.error("Erro ao guardar:", error);
+      alert("Erro ao guardar");
+    }
+  }
+
+ async function exportarExcel() {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Folha Semanal");
+
+    const semanaTexto =
+      inicioSemana && fimSemana
+        ? `${formatDatePt(inicioSemana)} até ${formatDatePt(fimSemana)}`
+        : semanaKey;
+
+    worksheet.columns = [
+      { header: "Nome", key: "nome", width: 28 },
+      { header: "Seg", key: "seg", width: 10 },
+      { header: "Ter", key: "ter", width: 10 },
+      { header: "Qua", key: "qua", width: 10 },
+      { header: "Qui", key: "qui", width: 10 },
+      { header: "Sex", key: "sex", width: 10 },
+      { header: "Sáb", key: "sab", width: 10 },
+      { header: "Dom", key: "dom", width: 10 },
+      { header: "Total", key: "total", width: 12 },
+    ];
+
+    worksheet.mergeCells("A1:I1");
+    worksheet.getCell("A1").value = "AJP Horas";
+    worksheet.getCell("A1").font = {
+      size: 18,
+      bold: true,
+      color: { argb: "FFFFFFFF" },
+    };
+    worksheet.getCell("A1").alignment = {
+      horizontal: "center",
+      vertical: "middle",
+    };
+    worksheet.getCell("A1").fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "1D4ED8" },
+    };
+    worksheet.getRow(1).height = 28;
+
+    worksheet.mergeCells("A2:I2");
+    worksheet.getCell("A2").value = `Equipa: ${nomeEquipa}`;
+    worksheet.getCell("A2").font = { bold: true, size: 14 };
+    worksheet.getCell("A2").alignment = { horizontal: "left" };
+
+    worksheet.mergeCells("A3:I3");
+    worksheet.getCell("A3").value = `Semana: ${semanaTexto}`;
+    worksheet.getCell("A3").font = { italic: true, size: 12 };
+    worksheet.getCell("A3").alignment = { horizontal: "left" };
+
+    const headerRow = worksheet.getRow(5);
+    headerRow.values = ["Nome", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom", "Total"];
+    headerRow.height = 22;
+
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "1E293B" },
+      };
+      cell.border = {
+        top: { style: "thin", color: { argb: "000000" } },
+        left: { style: "thin", color: { argb: "000000" } },
+        bottom: { style: "thin", color: { argb: "000000" } },
+        right: { style: "thin", color: { argb: "000000" } },
+      };
+    });
+
+    let linhaInicialDados = 6;
+
+    linhas.forEach((l, index) => {
+      const row = worksheet.getRow(linhaInicialDados + index);
+      row.values = [
+        l.nome || "",
+        Number(l.seg || 0),
+        Number(l.ter || 0),
+        Number(l.qua || 0),
+        Number(l.qui || 0),
+        Number(l.sex || 0),
+        Number(l.sab || 0),
+        Number(l.dom || 0),
+        total(l),
+      ];
+
+      row.eachCell((cell, colNumber) => {
+        cell.alignment = {
+          horizontal: colNumber === 1 ? "left" : "center",
+          vertical: "middle",
+        };
+
+        cell.border = {
+          top: { style: "thin", color: { argb: "000000" } },
+          left: { style: "thin", color: { argb: "000000" } },
+          bottom: { style: "thin", color: { argb: "000000" } },
+          right: { style: "thin", color: { argb: "000000" } },
+        };
+
+        if (colNumber === 9) {
+          cell.font = { bold: true };
+        }
+      });
+    });
+
+    const totalRowNumber = linhaInicialDados + linhas.length + 1;
+    worksheet.mergeCells(`A${totalRowNumber}:H${totalRowNumber}`);
+    worksheet.getCell(`A${totalRowNumber}`).value = "Total da equipa";
+    worksheet.getCell(`I${totalRowNumber}`).value = totalEquipa();
+
+    worksheet.getRow(totalRowNumber).eachCell((cell) => {
+      cell.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "16A34A" },
+      };
+      cell.border = {
+        top: { style: "thin", color: { argb: "000000" } },
+        left: { style: "thin", color: { argb: "000000" } },
+        bottom: { style: "thin", color: { argb: "000000" } },
+        right: { style: "thin", color: { argb: "000000" } },
+      };
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    saveAs(blob, `${nomeEquipa || "equipa"}_${semanaKey}.xlsx`);
+  } catch (error) {
+    console.error("Erro ao exportar Excel:", error);
+    alert("Erro ao exportar Excel.");
+  }
+}
 
   function semanaAnterior() {
-    const novaData = new Date(dataSemana);
-    novaData.setDate(novaData.getDate() - 7);
-    setDataSemana(novaData);
+    if (!semanaBase) return;
+    const nova = new Date(semanaBase);
+    nova.setDate(nova.getDate() - 7);
+    setLoading(true);
+    setSemanaBase(nova);
   }
 
   function proximaSemana() {
-    const novaData = new Date(dataSemana);
-    novaData.setDate(novaData.getDate() + 7);
-    setDataSemana(novaData);
+    if (!semanaBase) return;
+    const nova = new Date(semanaBase);
+    nova.setDate(nova.getDate() + 7);
+    setLoading(true);
+    setSemanaBase(nova);
   }
 
-  function exportarCSV() {
-    const cabecalho = [
-      "Trabalhador",
-      "Seg",
-      "Ter",
-      "Qua",
-      "Qui",
-      "Sex",
-      "Sáb",
-      "Dom",
-      "Total",
-    ];
-
-    const linhasCSV = linhas.map((linha) => [
-      linha.nome,
-      linha.Seg,
-      linha.Ter,
-      linha.Qua,
-      linha.Qui,
-      linha.Sex,
-      linha.Sáb,
-      linha.Dom,
-      String(totalTrabalhador(linha)),
-    ]);
-
-    const conteudo = [cabecalho, ...linhasCSV]
-      .map((linha) =>
-        linha
-          .map((campo) => `"${String(campo ?? "").replace(/"/g, '""')}"`)
-          .join(";")
-      )
-      .join("\n");
-
-    const blob = new Blob(["\uFEFF" + conteudo], {
-      type: "text/csv;charset=utf-8;",
-    });
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${nomeEquipa.replace(/\s+/g, "-").toLowerCase()}-${semanaKey}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  if (!mounted || loading || !inicioSemana || !fimSemana) {
+    return (
+      <div style={paginaStyle}>
+        <div style={containerStyle}>
+          <div style={topCardStyle}>
+            <h2 style={{ margin: 0 }}>A carregar...</h2>
+          </div>
+        </div>
+      </div>
+    );
   }
-
-  if (loading) return null;
 
   return (
     <div style={paginaStyle}>
       <div style={containerStyle}>
-        <div style={topBarStyle}>
-          <Link href="/dashboard" style={voltarStyle}>
-            ← Voltar
-          </Link>
-        </div>
+        <Link href="/dashboard" style={voltarStyle}>
+          ← Voltar
+        </Link>
 
-        <div style={cardTopoStyle}>
+        <div style={topCardStyle}>
           <div>
-            <p style={etiquetaStyle}>Folha semanal</p>
             <h1 style={tituloStyle}>{nomeEquipa}</h1>
+            <p style={subtituloStyle}>
+              Semana: {formatDatePt(inicioSemana)} até {formatDatePt(fimSemana)}
+            </p>
+            <p style={subtituloStyle}>
+              {isAdmin ? "Modo administrador" : "Modo encarregado"}
+            </p>
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              flexWrap: "wrap",
-            }}
-          >
-            <button onClick={semanaAnterior} style={botaoSemanaStyle}>
-              ⬅
+          <div style={semanaBotoesWrapStyle}>
+            <button onClick={semanaAnterior} style={botaoAzulStyle}>
+              ← Semana anterior
             </button>
-
-            <span style={textoSemanaStyle}>
-              {formatarData(inicioSemana)} → {formatarData(fimSemana)}
-            </span>
-
-            <button onClick={proximaSemana} style={botaoSemanaStyle}>
-              ➡
+            <button onClick={proximaSemana} style={botaoAzulStyle}>
+              Próxima semana →
             </button>
           </div>
         </div>
 
-        <div style={acoesSecundariasStyle}>
-          <button onClick={adicionarLinha} style={botaoSecundarioStyle}>
-            + Adicionar trabalhador
+        <div style={acoesStyle}>
+          <button onClick={add} style={botaoVerdeStyle}>
+            + Trabalhador
+          </button>
+
+          <button onClick={exportarExcel} style={botaoAzulStyle}>
+            Exportar Excel
           </button>
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              minWidth: 1100,
-              backgroundColor: "#020617",
-              borderRadius: 20,
-              overflow: "hidden",
-            }}
-          >
+          <table style={tableStyle}>
             <thead>
               <tr>
-                <th style={thStyle}>Trabalhador</th>
-                {dias.map((dia) => (
-                  <th key={dia} style={thStyle}>
-                    {dia}
-                  </th>
-                ))}
+                <th style={thStyle}>Nome</th>
+                <th style={thStyle}>Seg</th>
+                <th style={thStyle}>Ter</th>
+                <th style={thStyle}>Qua</th>
+                <th style={thStyle}>Qui</th>
+                <th style={thStyle}>Sex</th>
+                <th style={thStyle}>Sáb</th>
+                <th style={thStyle}>Dom</th>
                 <th style={thStyle}>Total</th>
-                <th style={thStyle}>Ações</th>
+                <th style={thStyle}></th>
               </tr>
             </thead>
 
             <tbody>
-              {linhas.map((linha, index) => (
-                <tr key={index}>
-                  <td style={tdStyleNome}>
+              {linhas.map((l, i) => (
+                <tr key={i}>
+                  <td style={tdStyle}>
                     <input
-                      type="text"
+                      value={l.nome}
+                      onChange={(e) => alterar(i, "nome", e.target.value)}
                       placeholder="Nome do trabalhador"
-                      value={linha.nome}
-                      onChange={(e) => atualizarNome(index, e.target.value)}
                       style={inputNomeStyle}
                     />
                   </td>
 
-                  {dias.map((dia) => (
-                    <td key={dia} style={tdStyle}>
-                      <input
-                        type="number"
-                        min="0"
-                        max="24"
-                        value={linha[dia]}
-                        onChange={(e) =>
-                          atualizarHora(index, dia, e.target.value)
-                        }
-                        style={inputStyle}
-                      />
-                    </td>
-                  ))}
+                  {(["seg", "ter", "qua", "qui", "sex", "sab", "dom"] as (keyof Linha)[]).map(
+                    (d) => (
+                      <td key={d} style={tdStyle}>
+                        <input
+                          type="number"
+                          value={l[d]}
+                          onChange={(e) => alterar(i, d, e.target.value)}
+                          style={inputHorasStyle}
+                        />
+                      </td>
+                    )
+                  )}
 
-                  <td style={tdStyleTotal}>{totalTrabalhador(linha)}</td>
+                  <td style={tdTotalStyle}>{total(l)}</td>
 
-                  <td style={tdStyleAcao}>
-                    <button
-                      onClick={() => removerLinha(index)}
-                      style={botaoRemoverStyle}
-                    >
-                      Remover
+                  <td style={tdStyle}>
+                    <button onClick={() => remover(i)} style={botaoVermelhoStyle}>
+                      X
                     </button>
                   </td>
                 </tr>
@@ -386,19 +471,11 @@ function FolhaEquipa({ id }: { id: string }) {
           </table>
         </div>
 
-        <div style={totalCardStyle}>Total da equipa: {totalEquipa} horas</div>
+        <div style={totalCardStyle}>Total equipa: {totalEquipa()}h</div>
 
-        <div style={rodapeBotoesStyle}>
-          <button onClick={guardarFolha} style={botaoGuardarStyle}>
-            Guardar folha
-          </button>
-
-          <button onClick={exportarCSV} style={botaoExcelStyle}>
-            Exportar para Excel
-          </button>
-        </div>
-
-        {mensagem && <p style={mensagemStyle}>{mensagem}</p>}
+        <button onClick={guardar} style={guardarStyle}>
+          Guardar
+        </button>
       </div>
     </div>
   );
@@ -406,216 +483,159 @@ function FolhaEquipa({ id }: { id: string }) {
 
 const paginaStyle: React.CSSProperties = {
   minHeight: "100vh",
-  background:
-    "linear-gradient(180deg, #020617 0%, #0f172a 50%, #111827 100%)",
+  background: "linear-gradient(180deg, #020617 0%, #0f172a 55%, #111827 100%)",
   color: "white",
   padding: 20,
 };
 
 const containerStyle: React.CSSProperties = {
-  maxWidth: 1250,
+  maxWidth: 1300,
   margin: "0 auto",
 };
 
-const topBarStyle: React.CSSProperties = {
-  maxWidth: 1250,
-  margin: "0 auto 18px auto",
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 12,
-  flexWrap: "wrap",
-};
-
 const voltarStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "12px 16px",
-  borderRadius: 12,
-  backgroundColor: "#0f172a",
-  border: "1px solid #334155",
-  color: "white",
+  color: "#60a5fa",
   textDecoration: "none",
   fontWeight: "bold",
 };
 
-const cardTopoStyle: React.CSSProperties = {
-  maxWidth: 1250,
-  margin: "0 auto 18px auto",
-  background: "linear-gradient(135deg, #1e293b, #0f172a)",
+const topCardStyle: React.CSSProperties = {
+  background: "#0f172a",
   border: "1px solid #334155",
-  borderRadius: 22,
-  padding: 22,
+  borderRadius: 20,
+  padding: 24,
+  marginTop: 20,
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  gap: 16,
+  gap: 20,
   flexWrap: "wrap",
-};
-
-const etiquetaStyle: React.CSSProperties = {
-  margin: 0,
-  color: "#94a3b8",
-  fontWeight: "bold",
 };
 
 const tituloStyle: React.CSSProperties = {
-  margin: "6px 0 0 0",
+  margin: 0,
   fontSize: 34,
-  fontWeight: "bold",
 };
 
-const textoSemanaStyle: React.CSSProperties = {
-  fontSize: 18,
-  fontWeight: "bold",
+const subtituloStyle: React.CSSProperties = {
+  color: "#94a3b8",
+  marginTop: 8,
+  marginBottom: 0,
 };
 
-const acoesSecundariasStyle: React.CSSProperties = {
-  maxWidth: 1250,
-  margin: "0 auto 18px auto",
+const semanaBotoesWrapStyle: React.CSSProperties = {
   display: "flex",
-  gap: 12,
+  gap: 10,
   flexWrap: "wrap",
 };
 
-const botaoSecundarioStyle: React.CSSProperties = {
-  padding: "14px 18px",
-  borderRadius: 12,
-  border: "1px solid #475569",
-  backgroundColor: "#0f172a",
-  color: "white",
-  fontWeight: "bold",
-  cursor: "pointer",
+const acoesStyle: React.CSSProperties = {
+  marginTop: 18,
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const tableStyle: React.CSSProperties = {
+  width: "100%",
+  minWidth: 1200,
+  borderCollapse: "collapse",
+  background: "#0f172a",
+  borderRadius: 16,
+  overflow: "hidden",
+  marginTop: 20,
 };
 
 const thStyle: React.CSSProperties = {
-  border: "1px solid #334155",
-  padding: 14,
-  backgroundColor: "#1e293b",
+  background: "#1e293b",
   color: "white",
+  padding: 14,
+  border: "1px solid #334155",
   textAlign: "center",
-  fontSize: 18,
 };
 
 const tdStyle: React.CSSProperties = {
-  border: "1px solid #334155",
   padding: 10,
+  border: "1px solid #334155",
   textAlign: "center",
 };
 
-const tdStyleNome: React.CSSProperties = {
-  border: "1px solid #334155",
+const tdTotalStyle: React.CSSProperties = {
   padding: 10,
-  minWidth: 240,
-};
-
-const tdStyleTotal: React.CSSProperties = {
   border: "1px solid #334155",
-  padding: 10,
   textAlign: "center",
   fontWeight: "bold",
-  minWidth: 90,
-  fontSize: 20,
-};
-
-const tdStyleAcao: React.CSSProperties = {
-  border: "1px solid #334155",
-  padding: 10,
-  textAlign: "center",
-  minWidth: 120,
-};
-
-const inputStyle: React.CSSProperties = {
-  width: 72,
-  padding: 12,
-  borderRadius: 12,
-  border: "1px solid #64748b",
-  textAlign: "center",
   fontSize: 18,
-  backgroundColor: "#0b1730",
-  color: "white",
 };
 
 const inputNomeStyle: React.CSSProperties = {
   width: "100%",
-  padding: 14,
-  borderRadius: 12,
-  border: "1px solid #64748b",
-  fontSize: 16,
-  backgroundColor: "#0b1730",
+  minWidth: 220,
+  padding: 10,
+  borderRadius: 8,
+  background: "#020617",
   color: "white",
+  border: "1px solid #334155",
+};
+
+const inputHorasStyle: React.CSSProperties = {
+  width: 70,
+  padding: 8,
+  borderRadius: 8,
+  background: "#020617",
+  color: "white",
+  border: "1px solid #334155",
+  textAlign: "center",
+};
+
+const guardarStyle: React.CSSProperties = {
+  marginTop: 20,
+  background: "#16a34a",
+  color: "white",
+  padding: "14px 20px",
+  borderRadius: 10,
+  border: "none",
+  fontWeight: "bold",
+  fontSize: 16,
+  cursor: "pointer",
 };
 
 const totalCardStyle: React.CSSProperties = {
-  maxWidth: 1250,
-  margin: "20px auto 0 auto",
-  padding: 18,
-  backgroundColor: "#0b1730",
-  borderRadius: 18,
+  marginTop: 20,
+  background: "#0f172a",
+  border: "1px solid #334155",
+  padding: 20,
+  borderRadius: 16,
   fontSize: 28,
   fontWeight: "bold",
 };
 
-const rodapeBotoesStyle: React.CSSProperties = {
-  maxWidth: 1250,
-  margin: "20px auto 0 auto",
-  display: "flex",
-  gap: 14,
-  flexWrap: "wrap",
-};
-
-const botaoGuardarStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 220,
-  padding: 18,
-  borderRadius: 16,
-  border: "none",
-  backgroundColor: "#16a34a",
+const botaoAzulStyle: React.CSSProperties = {
+  background: "#2563eb",
   color: "white",
-  fontSize: 20,
-  fontWeight: "bold",
-  cursor: "pointer",
-};
-
-const botaoExcelStyle: React.CSSProperties = {
-  flex: 1,
-  minWidth: 220,
-  padding: 18,
-  borderRadius: 16,
-  border: "none",
-  backgroundColor: "#1d4ed8",
-  color: "white",
-  fontSize: 20,
-  fontWeight: "bold",
-  cursor: "pointer",
-};
-
-const botaoRemoverStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "none",
-  backgroundColor: "#dc2626",
-  color: "white",
-  fontWeight: "bold",
-  cursor: "pointer",
-};
-
-const botaoSemanaStyle: React.CSSProperties = {
   padding: "10px 14px",
-  borderRadius: 10,
+  borderRadius: 8,
   border: "none",
-  backgroundColor: "#2563eb",
-  color: "white",
-  fontSize: 16,
-  fontWeight: "bold",
   cursor: "pointer",
+  fontWeight: "bold",
 };
 
-const mensagemStyle: React.CSSProperties = {
-  maxWidth: 1250,
-  margin: "14px auto 0 auto",
-  color: "#4ade80",
+const botaoVerdeStyle: React.CSSProperties = {
+  background: "#16a34a",
+  color: "white",
+  padding: "10px 14px",
+  borderRadius: 8,
+  border: "none",
+  cursor: "pointer",
   fontWeight: "bold",
-  fontSize: 16,
+};
+
+const botaoVermelhoStyle: React.CSSProperties = {
+  background: "#dc2626",
+  color: "white",
+  border: "none",
+  padding: "8px 10px",
+  borderRadius: 8,
+  cursor: "pointer",
+  fontWeight: "bold",
 };
