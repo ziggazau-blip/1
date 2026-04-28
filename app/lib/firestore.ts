@@ -17,6 +17,7 @@ export type Equipa = {
   ownerUid: string;
   ownerEmail: string;
   createdAt: number;
+  trabalhadores?: string[];
 };
 
 export async function criarEquipa(
@@ -28,6 +29,7 @@ export async function criarEquipa(
     ownerUid: user.uid,
     ownerEmail: user.email || "",
     createdAt: Date.now(),
+    trabalhadores: [],
   });
 
   await updateDoc(doc(db, "equipas", ref.id), {

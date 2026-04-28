@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where, } from "firebase/firestore";
 import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 import { auth, db } from "../../lib/firebase";
@@ -148,6 +148,7 @@ export default function EquipaPage() {
 
         setNomeEquipa(equipa.nome);
         setOwnerUid(equipa.ownerUid);
+        const trabalhadoresEquipa = equipa.trabalhadores || [];
 
         const folhaRef = doc(db, "folhas", folhaDocId);
         const folhaSnap = await getDoc(folhaRef);
@@ -158,8 +159,17 @@ export default function EquipaPage() {
             setLinhas(data.linhas as Linha[]);
           }
         } else {
-          setLinhas([novaLinha(), novaLinha(), novaLinha()]);
-        }
+  if (trabalhadoresEquipa.length > 0) {
+    setLinhas(
+      trabalhadoresEquipa.map((nome: string) => ({
+        ...novaLinha(),
+        nome,
+      }))
+    );
+  } else {
+    setLinhas([novaLinha(), novaLinha(), novaLinha()]);
+  }
+}
       } catch (error) {
         console.error("Erro ao carregar folha:", error);
       } finally {
@@ -218,6 +228,14 @@ export default function EquipaPage() {
         updatedAt: Date.now(),
         updatedBy: user.email || "",
       });
+
+      const trabalhadoresAtualizados = linhas
+  .map((l) => l.nome.trim())
+  .filter((nome) => nome.length > 0);
+
+await updateDoc(doc(db, "equipas", equipaId), {
+  trabalhadores: trabalhadoresAtualizados,
+});
 
       alert("Guardado com sucesso 💪");
     } catch (error) {
@@ -362,6 +380,229 @@ export default function EquipaPage() {
     }
   }
 
+  async function exportarExcelMensal() {
+  if (!inicioSemana || !fimSemana || !equipaId) return;
+
+  try {
+    const mesAtual = inicioSemana.getMonth();
+    const anoAtual = inicioSemana.getFullYear();
+
+    const nomeMes = inicioSemana.toLocaleDateString("pt-PT", {
+      month: "long",
+      year: "numeric",
+    });
+
+    const q = query(
+      collection(db, "folhas"),
+      where("equipaId", "==", equipaId)
+    );
+
+    const snap = await getDocs(q);
+
+    const trabalhadores: Record<string, Linha> = {};
+
+    snap.docs.forEach((docSnap) => {
+      const data = docSnap.data();
+
+      if (!data.inicioSemana || !Array.isArray(data.linhas)) return;
+
+      const inicio = new Date(data.inicioSemana);
+
+      data.linhas.forEach((linha: Linha) => {
+        const nome = linha.nome?.trim();
+        if (!nome) return;
+
+        if (!trabalhadores[nome]) {
+          trabalhadores[nome] = {
+            nome,
+            seg: "0",
+            ter: "0",
+            qua: "0",
+            qui: "0",
+            sex: "0",
+            sab: "0",
+            dom: "0",
+          };
+        }
+
+        const dias: (keyof Linha)[] = [
+          "seg",
+          "ter",
+          "qua",
+          "qui",
+          "sex",
+          "sab",
+          "dom",
+        ];
+
+        dias.forEach((dia, index) => {
+          const dataDia = new Date(inicio);
+          dataDia.setDate(inicio.getDate() + index);
+
+          if (
+            dataDia.getMonth() === mesAtual &&
+            dataDia.getFullYear() === anoAtual
+          ) {
+            const valorAtual = Number(trabalhadores[nome][dia] || 0);
+            const valorNovo = Number(linha[dia] || 0);
+
+            trabalhadores[nome][dia] = String(valorAtual + valorNovo);
+          }
+        });
+      });
+    });
+
+    const linhasMensais = Object.values(trabalhadores);
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Resumo Mensal");
+
+    worksheet.columns = [
+      { header: "Nome", key: "nome", width: 28 },
+      { header: "Seg", key: "seg", width: 10 },
+      { header: "Ter", key: "ter", width: 10 },
+      { header: "Qua", key: "qua", width: 10 },
+      { header: "Qui", key: "qui", width: 10 },
+      { header: "Sex", key: "sex", width: 10 },
+      { header: "Sáb", key: "sab", width: 10 },
+      { header: "Dom", key: "dom", width: 10 },
+      { header: "Total", key: "total", width: 12 },
+    ];
+
+    worksheet.mergeCells("A1:I1");
+    worksheet.getCell("A1").value = "AJP Horas";
+    worksheet.getCell("A1").font = {
+      size: 18,
+      bold: true,
+      color: { argb: "FFFFFFFF" },
+    };
+    worksheet.getCell("A1").alignment = {
+      horizontal: "center",
+      vertical: "middle",
+    };
+    worksheet.getCell("A1").fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "1D4ED8" },
+    };
+
+    worksheet.mergeCells("A2:I2");
+    worksheet.getCell("A2").value = `Equipa: ${nomeEquipa}`;
+    worksheet.getCell("A2").font = { bold: true, size: 14 };
+
+    worksheet.mergeCells("A3:I3");
+    worksheet.getCell("A3").value = `Resumo mensal: ${nomeMes}`;
+    worksheet.getCell("A3").font = { italic: true, size: 12 };
+
+    const headerRow = worksheet.getRow(5);
+    headerRow.values = [
+      "Nome",
+      "Seg",
+      "Ter",
+      "Qua",
+      "Qui",
+      "Sex",
+      "Sáb",
+      "Dom",
+      "Total",
+    ];
+
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "1E293B" },
+      };
+      cell.border = {
+        top: { style: "thin", color: { argb: "000000" } },
+        left: { style: "thin", color: { argb: "000000" } },
+        bottom: { style: "thin", color: { argb: "000000" } },
+        right: { style: "thin", color: { argb: "000000" } },
+      };
+    });
+
+    let totalGeral = 0;
+
+    linhasMensais.forEach((l, index) => {
+      const totalLinha =
+        Number(l.seg || 0) +
+        Number(l.ter || 0) +
+        Number(l.qua || 0) +
+        Number(l.qui || 0) +
+        Number(l.sex || 0) +
+        Number(l.sab || 0) +
+        Number(l.dom || 0);
+
+      totalGeral += totalLinha;
+
+      const row = worksheet.getRow(6 + index);
+      row.values = [
+        l.nome,
+        Number(l.seg || 0),
+        Number(l.ter || 0),
+        Number(l.qua || 0),
+        Number(l.qui || 0),
+        Number(l.sex || 0),
+        Number(l.sab || 0),
+        Number(l.dom || 0),
+        totalLinha,
+      ];
+
+      row.eachCell((cell, colNumber) => {
+        cell.alignment = {
+          horizontal: colNumber === 1 ? "left" : "center",
+          vertical: "middle",
+        };
+        cell.border = {
+          top: { style: "thin", color: { argb: "000000" } },
+          left: { style: "thin", color: { argb: "000000" } },
+          bottom: { style: "thin", color: { argb: "000000" } },
+          right: { style: "thin", color: { argb: "000000" } },
+        };
+
+        if (colNumber === 9) {
+          cell.font = { bold: true };
+        }
+      });
+    });
+
+    const totalRowNumber = 6 + linhasMensais.length + 1;
+
+    worksheet.mergeCells(`A${totalRowNumber}:H${totalRowNumber}`);
+    worksheet.getCell(`A${totalRowNumber}`).value = "Total mensal da equipa";
+    worksheet.getCell(`I${totalRowNumber}`).value = totalGeral;
+
+    worksheet.getRow(totalRowNumber).eachCell((cell) => {
+      cell.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "16A34A" },
+      };
+      cell.border = {
+        top: { style: "thin", color: { argb: "000000" } },
+        left: { style: "thin", color: { argb: "000000" } },
+        bottom: { style: "thin", color: { argb: "000000" } },
+        right: { style: "thin", color: { argb: "000000" } },
+      };
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    const blob = new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    saveAs(blob, `${nomeEquipa || "equipa"}_${nomeMes}_mensal.xlsx`);
+  } catch (error) {
+    console.error("Erro ao exportar mês:", error);
+    alert("Erro ao exportar mês.");
+  }
+}
+
   function semanaAnterior() {
     if (!semanaBase) return;
     const nova = new Date(semanaBase);
@@ -424,8 +665,13 @@ export default function EquipaPage() {
           </button>
 
           <button onClick={exportarExcel} style={botaoAzulStyle}>
-            Exportar Excel
+            Exportar Semanal
           </button>
+
+          <button onClick={exportarExcelMensal} style={botaoAzulStyle}>
+          Exportar Mês
+          </button>
+
         </div>
 
         {isMobile ? (
