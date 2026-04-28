@@ -379,9 +379,8 @@ await updateDoc(doc(db, "equipas", equipaId), {
       alert("Erro ao exportar Excel.");
     }
   }
-
-  async function exportarExcelMensal() {
-  if (!inicioSemana || !fimSemana || !equipaId) return;
+async function exportarExcelMensal() {
+  if (!inicioSemana || !equipaId) return;
 
   try {
     const mesAtual = inicioSemana.getMonth();
@@ -392,6 +391,8 @@ await updateDoc(doc(db, "equipas", equipaId), {
       year: "numeric",
     });
 
+    const diasNoMes = new Date(anoAtual, mesAtual + 1, 0).getDate();
+
     const q = query(
       collection(db, "folhas"),
       where("equipaId", "==", equipaId)
@@ -399,7 +400,13 @@ await updateDoc(doc(db, "equipas", equipaId), {
 
     const snap = await getDocs(q);
 
-    const trabalhadores: Record<string, Linha> = {};
+    const trabalhadores: Record<
+      string,
+      {
+        nome: string;
+        dias: Record<number, number>;
+      }
+    > = {};
 
     snap.docs.forEach((docSnap) => {
       const data = docSnap.data();
@@ -415,17 +422,11 @@ await updateDoc(doc(db, "equipas", equipaId), {
         if (!trabalhadores[nome]) {
           trabalhadores[nome] = {
             nome,
-            seg: "0",
-            ter: "0",
-            qua: "0",
-            qui: "0",
-            sex: "0",
-            sab: "0",
-            dom: "0",
+            dias: {},
           };
         }
 
-        const dias: (keyof Linha)[] = [
+        const diasSemana: (keyof Linha)[] = [
           "seg",
           "ter",
           "qua",
@@ -435,7 +436,7 @@ await updateDoc(doc(db, "equipas", equipaId), {
           "dom",
         ];
 
-        dias.forEach((dia, index) => {
+        diasSemana.forEach((diaKey, index) => {
           const dataDia = new Date(inicio);
           dataDia.setDate(inicio.getDate() + index);
 
@@ -443,67 +444,65 @@ await updateDoc(doc(db, "equipas", equipaId), {
             dataDia.getMonth() === mesAtual &&
             dataDia.getFullYear() === anoAtual
           ) {
-            const valorAtual = Number(trabalhadores[nome][dia] || 0);
-            const valorNovo = Number(linha[dia] || 0);
+            const diaDoMes = dataDia.getDate();
+            const horas = Number(linha[diaKey] || 0);
 
-            trabalhadores[nome][dia] = String(valorAtual + valorNovo);
+            trabalhadores[nome].dias[diaDoMes] =
+              (trabalhadores[nome].dias[diaDoMes] || 0) + horas;
           }
         });
       });
     });
 
-    const linhasMensais = Object.values(trabalhadores);
+    const linhasMensais = Object.values(trabalhadores).sort((a, b) =>
+      a.nome.localeCompare(b.nome)
+    );
+
+    if (linhasMensais.length === 0) {
+      alert("Não existem horas guardadas para este mês.");
+      return;
+    }
 
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Resumo Mensal");
 
     worksheet.columns = [
-      { header: "Nome", key: "nome", width: 28 },
-      { header: "Seg", key: "seg", width: 10 },
-      { header: "Ter", key: "ter", width: 10 },
-      { header: "Qua", key: "qua", width: 10 },
-      { header: "Qui", key: "qui", width: 10 },
-      { header: "Sex", key: "sex", width: 10 },
-      { header: "Sáb", key: "sab", width: 10 },
-      { header: "Dom", key: "dom", width: 10 },
-      { header: "Total", key: "total", width: 12 },
+      { width: 28 },
+      ...Array.from({ length: diasNoMes }, () => ({ width: 6 })),
+      { width: 12 },
     ];
 
-    worksheet.mergeCells("A1:I1");
-    worksheet.getCell("A1").value = "AJP Horas";
-    worksheet.getCell("A1").font = {
+    const ultimaColuna = diasNoMes + 2;
+
+    worksheet.mergeCells(1, 1, 1, ultimaColuna);
+    worksheet.getCell(1, 1).value = "AJP Horas";
+    worksheet.getCell(1, 1).font = {
       size: 18,
       bold: true,
       color: { argb: "FFFFFFFF" },
     };
-    worksheet.getCell("A1").alignment = {
+    worksheet.getCell(1, 1).alignment = {
       horizontal: "center",
       vertical: "middle",
     };
-    worksheet.getCell("A1").fill = {
+    worksheet.getCell(1, 1).fill = {
       type: "pattern",
       pattern: "solid",
       fgColor: { argb: "1D4ED8" },
     };
 
-    worksheet.mergeCells("A2:I2");
-    worksheet.getCell("A2").value = `Equipa: ${nomeEquipa}`;
-    worksheet.getCell("A2").font = { bold: true, size: 14 };
+    worksheet.mergeCells(2, 1, 2, ultimaColuna);
+    worksheet.getCell(2, 1).value = `Equipa: ${nomeEquipa}`;
+    worksheet.getCell(2, 1).font = { bold: true, size: 14 };
 
-    worksheet.mergeCells("A3:I3");
-    worksheet.getCell("A3").value = `Resumo mensal: ${nomeMes}`;
-    worksheet.getCell("A3").font = { italic: true, size: 12 };
+    worksheet.mergeCells(3, 1, 3, ultimaColuna);
+    worksheet.getCell(3, 1).value = `Resumo mensal: ${nomeMes}`;
+    worksheet.getCell(3, 1).font = { italic: true, size: 12 };
 
     const headerRow = worksheet.getRow(5);
     headerRow.values = [
       "Nome",
-      "Seg",
-      "Ter",
-      "Qua",
-      "Qui",
-      "Sex",
-      "Sáb",
-      "Dom",
+      ...Array.from({ length: diasNoMes }, (_, i) => i + 1),
       "Total",
     ];
 
@@ -523,38 +522,27 @@ await updateDoc(doc(db, "equipas", equipaId), {
       };
     });
 
-    let totalGeral = 0;
+    let totalMensalEquipa = 0;
 
-    linhasMensais.forEach((l, index) => {
-      const totalLinha =
-        Number(l.seg || 0) +
-        Number(l.ter || 0) +
-        Number(l.qua || 0) +
-        Number(l.qui || 0) +
-        Number(l.sex || 0) +
-        Number(l.sab || 0) +
-        Number(l.dom || 0);
-
-      totalGeral += totalLinha;
-
+    linhasMensais.forEach((trabalhador, index) => {
       const row = worksheet.getRow(6 + index);
-      row.values = [
-        l.nome,
-        Number(l.seg || 0),
-        Number(l.ter || 0),
-        Number(l.qua || 0),
-        Number(l.qui || 0),
-        Number(l.sex || 0),
-        Number(l.sab || 0),
-        Number(l.dom || 0),
-        totalLinha,
-      ];
+
+      const horasDias = Array.from({ length: diasNoMes }, (_, i) => {
+        const dia = i + 1;
+        return trabalhador.dias[dia] || 0;
+      });
+
+      const totalTrabalhador = horasDias.reduce((acc, h) => acc + h, 0);
+      totalMensalEquipa += totalTrabalhador;
+
+      row.values = [trabalhador.nome, ...horasDias, totalTrabalhador];
 
       row.eachCell((cell, colNumber) => {
         cell.alignment = {
           horizontal: colNumber === 1 ? "left" : "center",
           vertical: "middle",
         };
+
         cell.border = {
           top: { style: "thin", color: { argb: "000000" } },
           left: { style: "thin", color: { argb: "000000" } },
@@ -562,7 +550,7 @@ await updateDoc(doc(db, "equipas", equipaId), {
           right: { style: "thin", color: { argb: "000000" } },
         };
 
-        if (colNumber === 9) {
+        if (colNumber === ultimaColuna) {
           cell.font = { bold: true };
         }
       });
@@ -570,9 +558,9 @@ await updateDoc(doc(db, "equipas", equipaId), {
 
     const totalRowNumber = 6 + linhasMensais.length + 1;
 
-    worksheet.mergeCells(`A${totalRowNumber}:H${totalRowNumber}`);
-    worksheet.getCell(`A${totalRowNumber}`).value = "Total mensal da equipa";
-    worksheet.getCell(`I${totalRowNumber}`).value = totalGeral;
+    worksheet.mergeCells(totalRowNumber, 1, totalRowNumber, ultimaColuna - 1);
+    worksheet.getCell(totalRowNumber, 1).value = "Total mensal da equipa";
+    worksheet.getCell(totalRowNumber, ultimaColuna).value = totalMensalEquipa;
 
     worksheet.getRow(totalRowNumber).eachCell((cell) => {
       cell.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
@@ -590,6 +578,8 @@ await updateDoc(doc(db, "equipas", equipaId), {
       };
     });
 
+    worksheet.views = [{ state: "frozen", ySplit: 5, xSplit: 1 }];
+
     const buffer = await workbook.xlsx.writeBuffer();
 
     const blob = new Blob([buffer], {
@@ -602,6 +592,7 @@ await updateDoc(doc(db, "equipas", equipaId), {
     alert("Erro ao exportar mês.");
   }
 }
+
 
   function semanaAnterior() {
     if (!semanaBase) return;
