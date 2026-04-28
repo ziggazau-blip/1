@@ -848,9 +848,9 @@ const semanaBotoesWrapStyle: React.CSSProperties = {
 
 const acoesStyle: React.CSSProperties = {
   marginTop: 18,
-  display: "flex",
+  display: "grid",
+  gridTemplateColumns: "repeat(2, 1fr)",
   gap: 10,
-  flexWrap: "wrap",
 };
 
 const tableStyle: React.CSSProperties = {
@@ -939,26 +939,30 @@ const botaoAzulStyle: React.CSSProperties = {
   minWidth: 0,
   background: "#2563eb",
   color: "white",
-  padding: "12px 14px",
+  padding: "12px 10px",
   borderRadius: 10,
   border: "none",
   cursor: "pointer",
   fontWeight: "bold",
   fontSize: 14,
   boxShadow: "0 10px 22px rgba(37,99,235,0.22)",
-  whiteSpace: "nowrap",
+  whiteSpace: "normal",
+  textAlign: "center",
+  lineHeight: 1.2,
 };
 
 const botaoVerdeStyle: React.CSSProperties = {
   background: "#16a34a",
   color: "white",
-  padding: "12px 16px",
+  padding: "12px 12px",
   borderRadius: 10,
   border: "none",
   cursor: "pointer",
   fontWeight: "bold",
   fontSize: 15,
   boxShadow: "0 10px 22px rgba(22,163,74,0.22)",
+  width: "100%",
+  gridColumn: "1 / -1",
 };
 
 const botaoVermelhoStyle: React.CSSProperties = {
